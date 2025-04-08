@@ -106,10 +106,8 @@ from pokerkit import Automation, Mode, NoLimitTexasHoldem
 
 
 class Player:
-    
-    def __init__(self, card1: Card, card2: Card):
-        self.card1 = card1
-        self.card2 = card2
+   pass 
+   
 
     
     
