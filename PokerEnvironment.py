@@ -6,8 +6,8 @@ from typing import List, Tuple
 from enum import Enum
 
 from math import inf
+from pokerkit import NoLimitTexasHoldem, Automation, Mode
 
-from pokerkit import Automation, Mode, NoLimitTexasHoldem
 #The exact numers don't matter extactly just need gaps between them to calculate score
 
 # class PokerHand(Enum):
@@ -102,23 +102,146 @@ from pokerkit import Automation, Mode, NoLimitTexasHoldem
 #             return "Tie" if tiebreaker1 == tiebreaker2 else ("Player 1 wins" if tiebreaker1 > tiebreaker2 else "Player 2 wins")
 
         
+
+
+
+class PokerEnvironment:
+    def __init__(self, player_count=2, small_blind=50, big_blind=100, stacks=None):
+        if stacks is None:
+            stacks = [20000] * player_count
+        self.game = NoLimitTexasHoldem.create_state(
+            (
+                Automation(Automation.ANTE_POSTING),
+                Automation(Automation.BET_COLLECTION),
+                Automation(Automation.BLIND_OR_STRADDLE_POSTING),
+                Automation(Automation.HOLE_CARDS_SHOWING_OR_MUCKING),
+                Automation(Automation.HAND_KILLING),
+                Automation(Automation.CHIPS_PUSHING),
+                Automation(Automation.CHIPS_PULLING),
+            ),
+            False,
+            {-1: 600},
+            (200, 400, 800),
+            400,
+            tuple(stacks),
+            len(stacks),
+            mode=Mode.CASH_GAME,
+        )
+        self.currentIndex = 0 
+        self.game_agent_count = 0
+        self.registered_agents = 0
+        self.currentGame: List[str] = []
+    
+    
+    def load_specific_game(self, whole_game: List[str], stacks: List[int], agent_count:int=0):
+        """
+         Load a game with specific format
+         
+         First line is the game settings / formant
+         Args
+            whole_game: The whole game, for the agent injection specify their spot with A1, A2 etc. 
+            agent_count: Amount of agents needed for the game
+         """
+        game_settings = whole_game[0].split(' ')
+        self.game = NoLimitTexasHoldem.create_state(
+            automations=(
+                Automation(Automation.ANTE_POSTING),
+                Automation(Automation.BET_COLLECTION),
+                Automation(Automation.BLIND_OR_STRADDLE_POSTING),
+                Automation(Automation.HOLE_CARDS_SHOWING_OR_MUCKING),
+                Automation(Automation.HAND_KILLING),
+                Automation(Automation.CHIPS_PUSHING),
+                Automation(Automation.CHIPS_PULLING),
+            ),
+            ante_trimming_status=game_settings[0] == 'True',  # Uniform antes?
+            raw_antes={-1: int(game_settings[1])},  # Antes
+            raw_blinds_or_straddles=(int(game_settings[2]), int(game_settings[3]), int(game_settings[4])),  # Blinds or straddles
+            min_bet=int(game_settings[5]),  # Min-bet
+            raw_starting_stacks=tuple(stacks),
+            player_count=len(stacks),  # Number of players
+            mode=Mode.TOURNAMENT,
+        )
+        self.currentGame = whole_game
+        self.currentIndex = 1
+        self.game_agent_count = agent_count
+        if(self.registered_agents != self.game_agent_count):
+            raise Exception("Did not register enough agents")
         
+    def register_agent(self) -> int:
+        """
+         Register an agent and issue them an ID
+         
+         If too many agents for a game will raise an exception and won't run
+        """
+        
+        if(self.registered_agents == self.game_agent_count):
+            raise ValueError("Too many agents for the game")
+        self.registered_agents += 1
+        return self.registered_agents
+    
+    def clear_agents(self):
+        self.registered_agents = 0
+    def update_state(self):
+        self.state = {
+            "board": self.game.get_board_cards(0),
+            "main_pot": list(self.game.pots)[0],
+            "side_pot": list(self.game.pots)[1:],
+            "actions": [action.name for action in self.game.actions],
+            "raises": [a for a in self.game.round.actions if a.name == 'RAISE'],
+            "calls": [a for a in self.game.round.actions if a.name == 'CALL'],
+            "folds": [a for a in self.game.round.actions if a.name == 'FOLD'],
+            "checks": [a for a in self.game.round.actions if a.name == 'CHECK'],
+            "current_player": self.game.actor.index,
+            "legal_actions": [a.name for a in self.game.legal_actions]
+        }
+
+    def get_state(self):
+        return self.state
+
+    def make_move(self, player_id: int, action, amount=None) -> str:
+        if player_id != self.game.actor_index:
+            return "Out of Turn"
+
+        action = action.lower()
+        #have to figure out the legal actions
+        legal = [a.name.lower() for a in self.game.legal_actions]
+        if action not in legal:
+            return "Illegal Action"
+
+        if action == 'fold':
+            self.game.fold()
+        elif action == 'call' or action == 'check':
+            self.game.check_or_call()
+        elif action == 'raise':
+            if amount is None:
+                return "Raise amount needed"
+            self.game.complete_bet_or_raise_to(amount)
+        else:
+            return "Unsupported action"
+
+        self.update_state()
+        return "Action Made"
+
+    def is_terminal(self):
+        return not self.game.status
+    
+     
 
 
-class Player:
-   pass 
+# class Player:
+#    pass 
    
 
     
     
             
         
-class PokerState():
-    def __init__(self, board = [], pot  = 0):
-        self.board = board
-        self.pot = pot
+# class PokerState():
+#     def __init__(self, board = [], pot  = 0):
+#         self.board = board
+#         self.pot = pot
     
-class PokerEnvironment(AIEnvironment[PokerState, BetterEnum, BetterEnum]):
-    #def __init__(self):
-    pass    
+# class PokerEnvironment(AIEnvironment[PokerState, BetterEnum, BetterEnum]):
+#     #def __init__(self):
+#     pass    
     
