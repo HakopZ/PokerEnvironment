@@ -1,5 +1,6 @@
 from collections import Counter, OrderedDict
 from itertools import combinations
+import random
 from ai_environment import AIEnvironment 
 from ai_environment import BetterEnum
 from typing import List, Tuple
@@ -115,9 +116,11 @@ class PokerEnvironment:
                 Automation(Automation.BET_COLLECTION),
                 Automation(Automation.BLIND_OR_STRADDLE_POSTING),
                 Automation(Automation.HOLE_CARDS_SHOWING_OR_MUCKING),
+                Automation(Automation.CARD_BURNING),
                 Automation(Automation.HAND_KILLING),
                 Automation(Automation.CHIPS_PUSHING),
                 Automation(Automation.CHIPS_PULLING),
+                Automation(Automation.BOARD_DEALING)
             ),
             False,
             {-1: 600},
@@ -131,13 +134,15 @@ class PokerEnvironment:
         self.game_agent_count = 0
         self.registered_agents = 0
         self.currentGame: List[str] = []
+        self.keep_following_script = False
     
     
     def load_specific_game(self, whole_game: List[str], stacks: List[int], agent_count:int=0):
         """
          Load a game with specific format
          
-         First line is the game settings / formant
+         First line is the game settings / format
+         Ante_Trimming, raw_antes, small_blind, big_blind, straddle, min_bet
          Args
             whole_game: The whole game, for the agent injection specify their spot with A1, A2 etc. 
             agent_count: Amount of agents needed for the game
@@ -150,6 +155,7 @@ class PokerEnvironment:
                 Automation(Automation.BLIND_OR_STRADDLE_POSTING),
                 Automation(Automation.HOLE_CARDS_SHOWING_OR_MUCKING),
                 Automation(Automation.HAND_KILLING),
+                Automation(Automation.CARD_BURNING),
                 Automation(Automation.CHIPS_PUSHING),
                 Automation(Automation.CHIPS_PULLING),
             ),
@@ -164,6 +170,8 @@ class PokerEnvironment:
         self.currentGame = whole_game
         self.currentIndex = 1
         self.game_agent_count = agent_count
+        self.keep_following_script = True
+
         if(self.registered_agents != self.game_agent_count):
             raise Exception("Did not register enough agents")
         
@@ -186,41 +194,94 @@ class PokerEnvironment:
             "board": self.game.get_board_cards(0),
             "main_pot": list(self.game.pots)[0],
             "side_pot": list(self.game.pots)[1:],
-            "actions": [action.name for action in self.game.actions],
-            "raises": [a for a in self.game.round.actions if a.name == 'RAISE'],
-            "calls": [a for a in self.game.round.actions if a.name == 'CALL'],
-            "folds": [a for a in self.game.round.actions if a.name == 'FOLD'],
-            "checks": [a for a in self.game.round.actions if a.name == 'CHECK'],
-            "current_player": self.game.actor.index,
-            "legal_actions": [a.name for a in self.game.legal_actions]
+            "bets": [self.game.bets],
+            "players_in": [self.game.statuses],
+            "stack_sizes": [self.game.stacks],
+            "operations": [x.__name__ for x in self.game.operations],
+            "check_or_calling_amount": self.game.checking_or_calling_amount,
+            "min_raise_amount": self.game.min_completion_betting_or_raising_to_amount,
+            "max_raise_amount": self.game.max_completion_betting_or_raising_to_amount,
+            "current_player_to_go": self.game.actor_index
         }
 
     def get_state(self):
         return self.state
-
-    def make_move(self, player_id: int, action, amount=None) -> str:
+    
+    def next_move(self) -> bool:
+        """
+        If can, continue with the script, if not do a random move (need to figure out what the moves will be)
+        
+        Returns True if its an agents move, False if its script
+        """
+        
+        move = self.currentGame[self.currentIndex].split(' ')
+        if("Agent" in move[0]): return True
+                       
+        if move == "hole":
+            self.game.deal_hole(move[1])
+        elif move == "flop" or move == "turn" or move == "river":
+            self.game.deal_board(move[1])  
+        elif self.keep_following_script:
+            if move == "check" or move == "call":
+                self.game.check_or_call()
+            elif move == 'raise':
+                self.game.complete_bet_or_raise_to(int(move[1]))
+        elif not self.keep_following_script:
+            if move == "check" or move == "call" or move == "raise": #has to at least be a player move: debugging support
+                val = random.randint(1, 3)
+                match val:
+                    case 1:
+                        self.game.fold()
+                    case 2:
+                        self.game.check_or_call()
+                    case 3:
+                        pass
+                        #self.game.complete_bet_or_raise_to(self.game.completion_betting_or_raising_amount * 2) #can make this random i guess??? but need to know if current player has enough. will see if there is a better way
+                        #gotta figure this one out
+            else:
+                raise Exception("Invalid script line")
+        self.currentIndex+=1
+        if(self.currentIndex >= len(self.currentGame) and not self.is_terminal):
+            raise Exception("Should be terminal unless automatically terminal")
+        self.update_state()
+        return False
+    
+    def make_move(self, player_id: int, action, amount=None) -> bool:
+        """
+        Function for agent to make move
+        
+        Checks if action is valid and the player is right and attempts to make the move and updates the status
+        
+        Args
+            player_id: id associated with the game
+            action: action the agent wants to do
+            amount: if a bet, what the amount is, otherwise left None
+        
+        Returns
+            Status of the game afterwards: True for valid, False for invalid
+        """
         if player_id != self.game.actor_index:
-            return "Out of Turn"
+            return False #out of turn
 
         action = action.lower()
         #have to figure out the legal actions
-        legal = [a.name.lower() for a in self.game.legal_actions]
-        if action not in legal:
-            return "Illegal Action"
-
+        
         if action == 'fold':
+            self.game.verify_folding()
             self.game.fold()
         elif action == 'call' or action == 'check':
+            self.game.verify_checking_or_calling()
             self.game.check_or_call()
         elif action == 'raise':
+            self.game.verify_completion_betting_or_raising_to()
             if amount is None:
-                return "Raise amount needed"
+                raise Exception("Raise amount needed")
             self.game.complete_bet_or_raise_to(amount)
         else:
-            return "Unsupported action"
+            raise Exception("Unsupported action")
 
         self.update_state()
-        return "Action Made"
+        return True
 
     def is_terminal(self):
         return not self.game.status
